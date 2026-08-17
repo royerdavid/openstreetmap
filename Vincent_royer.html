@@ -1,0 +1,234 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Marche Vincent Royer</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+<style>
+  :root{
+    --bg:#0f1720; --panel:#161f2b; --line:#26313f; --ink:#e8edf3;
+    --muted:#9fb0c3; --accent:#3b82f6; --accent2:#22c55e; --warn:#f59e0b;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;background:var(--bg);color:var(--ink)}
+  #app{display:flex;height:100vh;width:100%}
+  #map{flex:1 1 auto;height:100%}
+  #side{flex:0 0 360px;max-width:360px;height:100%;overflow-y:auto;background:var(--panel);border-left:1px solid var(--line);padding:18px 18px 40px}
+  h1{font-size:17px;margin:0 0 2px;letter-spacing:.2px}
+  .sub{color:var(--muted);font-size:12.5px;margin:0 0 14px;line-height:1.5}
+  .stat{display:flex;gap:10px;margin:12px 0 6px}
+  .card{flex:1;background:#101826;border:1px solid var(--line);border-radius:12px;padding:12px 12px}
+  .card .k{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.6px}
+  .card .v{font-size:22px;font-weight:650;margin-top:3px}
+  .card .v small{font-size:12px;color:var(--muted);font-weight:500}
+  #status{font-size:12.5px;padding:9px 11px;border-radius:9px;margin:6px 0 14px;line-height:1.45}
+  .s-load{background:#13233a;border:1px solid #234; color:#bcd4ff}
+  .s-ok{background:#12261a;border:1px solid #1f5133;color:#c7f0d4}
+  .s-warn{background:#2a2110;border:1px solid #5a4413;color:#ffe3ac}
+  .btns{display:flex;flex-direction:column;gap:8px;margin:6px 0 16px}
+  a.btn{display:block;text-align:center;text-decoration:none;background:var(--accent);color:#fff;padding:9px 12px;border-radius:9px;font-size:13px;font-weight:600}
+  a.btn.alt{background:#1d2836;color:var(--ink);border:1px solid var(--line)}
+  a.btn:hover{filter:brightness(1.08)}
+  h2{font-size:12px;text-transform:uppercase;letter-spacing:.7px;color:var(--muted);margin:18px 0 8px}
+  table{width:100%;border-collapse:collapse;font-size:12.5px}
+  td{padding:6px 4px;border-bottom:1px solid var(--line);vertical-align:top}
+  td.n{width:26px;color:var(--muted)}
+  td.d{width:66px;text-align:right;color:#dbe7f5;white-space:nowrap;font-variant-numeric:tabular-nums}
+  .legname{color:var(--ink)}
+  .legfrom{color:var(--muted);font-size:11px}
+  tr.total td{border-top:2px solid var(--line);border-bottom:none;font-weight:700;padding-top:9px}
+  .pin{background:var(--accent);color:#fff;border:2px solid #fff;border-radius:50%;width:26px;height:26px;
+       display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;box-shadow:0 1px 4px rgba(0,0,0,.5)}
+  .pin.start{background:var(--accent2)}
+  .pin.end{background:#ef4444}
+  .foot{color:var(--muted);font-size:11px;margin-top:18px;line-height:1.5}
+  @media (max-width:760px){#app{flex-direction:column}#side{flex-basis:auto;max-width:none;height:auto;border-left:none;border-top:1px solid var(--line)}#map{height:56vh}}
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="map"></div>
+  <div id="side">
+    <h1>Marche Vincent Royer</h1>
+    <p class="sub">14 arrêts, dans l'ordre. Le tracé suit les rues et intersections réelles via le routeur piéton OpenStreetMap (OSRM).</p>
+
+    <div class="stat">
+      <div class="card"><div class="k">Distance totale</div><div class="v" id="total">…</div></div>
+      <div class="card"><div class="k">Durée à pied</div><div class="v" id="dur">…</div></div>
+    </div>
+
+    <div id="status" class="s-load">Calcul de l'itinéraire piéton en cours…</div>
+
+    <h2>Distances par segment</h2>
+    <table id="legs"><tbody></tbody></table>
+
+    <p class="foot">Routage : OSRM profil « foot » (routing.openstreetmap.de) · Fond de carte : OpenStreetMap. Cliquez la carte pour lire des coordonnées précises et ajuster un arrêt.</p>
+  </div>
+</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+const PTS = [
+  {n:1, lat:45.454752, lng:-73.574522, name:"758 Desmarchais"},
+  {n:2, lat:45.454396, lng:-73.566108, name:"Coin Desmarchais–LaSalle", fix:true},
+  {n:3, lat:45.462721, lng:-73.563686, name:"LaSalle et De l'Église"},
+  {n:4, lat:45.462921, lng:-73.562406, name:"Gaétan Laberge"},
+  {n:5, lat:45.470259, lng:-73.561896, name:"ESMR"}
+];
+
+// ---- Map ----
+const map = L.map('map', {scrollWheelZoom:true});
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+  maxZoom:19, attribution:'© OpenStreetMap'
+}).addTo(map);
+
+const bounds = L.latLngBounds(PTS.map(p=>[p.lat,p.lng]));
+map.fitBounds(bounds, {padding:[40,40]});
+
+// Markers are redrawn whenever we toggle snapped/original positions.
+let markerLayers=[];
+function drawMarkers(){
+  markerLayers.forEach(m=>map.removeLayer(m)); markerLayers=[];
+  PTS.forEach((p,i)=>{
+    const cls = i===0 ? 'pin start' : (i===PTS.length-1 ? 'pin end' : 'pin');
+    const icon = L.divIcon({className:'', html:`<div class="${cls}">${p.n}</div>`, iconSize:[26,26], iconAnchor:[13,13]});
+    const moved = (snapMode && p.snapDist) ? `<br><span style="color:#16a34a">ajusté ${p.snapDist} m vers le trottoir</span>` : '';
+    const m=L.marker([p.lat,p.lng],{icon}).addTo(map)
+      .bindPopup(`<b>${p.n}. ${p.name}</b><br>${p.lat.toFixed(6)}, ${p.lng.toFixed(6)}${moved}`);
+    markerLayers.push(m);
+  });
+}
+
+// ---- Helpers ----
+function fmtM(m){ return m>=1000 ? (m/1000).toFixed(2)+" km" : Math.round(m)+" m"; }
+function fmtDur(s){ const m=Math.round(s/60); if(m<60) return m+" min"; const h=Math.floor(m/60); return h+" h "+(m%60)+" min"; }
+function haversine(a,b){
+  const R=6371000, tr=Math.PI/180;
+  const dLat=(b.lat-a.lat)*tr, dLng=(b.lng-a.lng)*tr;
+  const s=Math.sin(dLat/2)**2+Math.cos(a.lat*tr)*Math.cos(b.lat*tr)*Math.sin(dLng/2)**2;
+  return 2*R*Math.asin(Math.sqrt(s));
+}
+
+function renderLegs(legDist, total, straight){
+  const tb = document.querySelector('#legs tbody');
+  tb.innerHTML='';
+  for(let i=0;i<PTS.length-1;i++){
+    const tr=document.createElement('tr');
+    tr.innerHTML = `<td class="n">${PTS[i].n}→${PTS[i+1].n}</td>`+
+                   `<td><div class="legname">${PTS[i+1].name}</div><div class="legfrom">depuis ${PTS[i].name}</div></td>`+
+                   `<td class="d">${fmtM(legDist[i])}</td>`;
+    tb.appendChild(tr);
+  }
+  const tr=document.createElement('tr'); tr.className='total';
+  tr.innerHTML=`<td></td><td>Total${straight?' (à vol d\'oiseau)':''}</td><td class="d">${fmtM(total)}</td>`;
+  tb.appendChild(tr);
+}
+
+// ---- Live pedestrian routing via OSRM foot ----
+let routeLayer=null;
+async function route(){
+  const statusEl=document.getElementById('status');
+  const coordStr = PTS.map(p=>`${p.lng},${p.lat}`).join(';');
+  const url=`https://routing.openstreetmap.de/routed-foot/route/v1/foot/${coordStr}?overview=full&geometries=geojson&steps=false&annotations=false`;
+  try{
+    const r=await fetch(url,{headers:{'Accept':'application/json'}});
+    if(!r.ok) throw new Error('HTTP '+r.status);
+    const d=await r.json();
+    if(d.code!=='Ok'||!d.routes||!d.routes.length) throw new Error(d.code||'no route');
+    const route=d.routes[0];
+    const line = route.geometry.coordinates.map(c=>[c[1],c[0]]);
+    if(routeLayer) map.removeLayer(routeLayer);
+    routeLayer=L.polyline(line,{color:'#3b82f6',weight:5,opacity:.9}).addTo(map);
+    map.fitBounds(L.latLngBounds(line),{padding:[40,40]});
+    const legDist = route.legs.map(l=>l.distance);
+    document.getElementById('total').innerHTML = fmtM(route.distance).replace(/ (km|m)/,' <small>$1</small>');
+    document.getElementById('dur').innerHTML   = fmtDur(route.duration);
+    renderLegs(legDist, route.distance, false);
+    statusEl.className='s-ok';
+    statusEl.textContent='Itinéraire piéton calculé (suit les rues réelles).';
+  }catch(e){
+    const line = PTS.map(p=>[p.lat,p.lng]);
+    if(routeLayer) map.removeLayer(routeLayer);
+    routeLayer=L.polyline(line,{color:'#f59e0b',weight:4,opacity:.85,dashArray:'8 8'}).addTo(map);
+    const legDist=[]; let total=0;
+    for(let i=0;i<PTS.length-1;i++){const dd=haversine(PTS[i],PTS[i+1]);legDist.push(dd);total+=dd;}
+    document.getElementById('total').innerHTML = fmtM(total).replace(/ (km|m)/,' <small>$1</small>');
+    document.getElementById('dur').innerHTML   = fmtDur(total/1.35);
+    renderLegs(legDist,total,true);
+    statusEl.className='s-warn';
+    statusEl.innerHTML='Le routeur piéton n\'a pas répondu ('+e.message+'). Affichage des distances <b>à vol d\'oiseau</b> (approximatives).';
+  }
+}
+
+// ---- Snap every dot onto the nearest OSM pedestrian way (sidewalk/footpath) ----
+PTS.forEach(p=>{ p.olat=p.lat; p.olng=p.lng; });   // keep the originals
+let snapMode=true;                                  // start with dots on the sidewalk
+
+async function snapOne(p){
+  if(p.fix){ p.slat=p.olat; p.slng=p.olng; p.snapDist=null; return; } // pinned by hand → never auto-snap
+  try{
+    const u=`https://routing.openstreetmap.de/routed-foot/nearest/v1/foot/${p.olng},${p.olat}?number=1`;
+    const r=await fetch(u); if(!r.ok) throw 0;
+    const d=await r.json();
+    if(d.code==='Ok' && d.waypoints && d.waypoints.length){
+      const [lng,lat]=d.waypoints[0].location;
+      p.slat=lat; p.slng=lng;
+      p.snapDist=Math.round(haversine({lat:p.olat,lng:p.olng},{lat,lng}));
+      return;
+    }
+  }catch(_){}
+  p.slat=p.olat; p.slng=p.olng; p.snapDist=null;    // fallback: leave as-is
+}
+async function snapAll(){ await Promise.all(PTS.map(snapOne)); }
+
+function applyMode(){
+  PTS.forEach(p=>{ p.lat = snapMode?p.slat:p.olat; p.lng = snapMode?p.slng:p.olng; });
+  drawMarkers();
+  route();
+}
+
+async function init(){
+  drawMarkers();     // show the given dots right away
+  await snapAll();   // find the nearest sidewalk for each
+  applyMode();       // move dots onto the sidewalk and route through them
+}
+init();
+
+// ---- Toggle: dots on the sidewalk vs. original coordinates ----
+const toggle=L.control({position:'topright'});
+toggle.onAdd=function(){
+  const d=L.DomUtil.create('div');
+  d.style.cssText='box-shadow:0 1px 5px rgba(0,0,0,.45);border-radius:8px;overflow:hidden';
+  const b=L.DomUtil.create('button','',d);
+  b.textContent='Points sur trottoir : ON';
+  b.style.cssText='background:#3b82f6;color:#fff;border:0;padding:9px 12px;font:600 12px/1 -apple-system,system-ui,sans-serif;cursor:pointer';
+  L.DomEvent.disableClickPropagation(d);
+  b.onclick=()=>{ snapMode=!snapMode; b.textContent='Points sur trottoir : '+(snapMode?'ON':'OFF'); b.style.background=snapMode?'#3b82f6':'#4b5563'; applyMode(); };
+  return d;
+};
+toggle.addTo(map);
+
+// ---- Coordinate picker: click the map to read a precise lat,lng (to place 12, 13, 11b) ----
+const pick=L.control({position:'bottomleft'});
+pick.onAdd=function(){
+  const d=L.DomUtil.create('div');
+  d.id='pick';
+  d.style.cssText='background:#161f2b;color:#e8edf3;border:1px solid #26313f;border-radius:8px;padding:6px 10px;font:12px/1.4 -apple-system,system-ui,sans-serif;box-shadow:0 1px 5px rgba(0,0,0,.45);max-width:220px';
+  d.innerHTML='📍 Cliquez la carte pour lire des coordonnées';
+  L.DomEvent.disableClickPropagation(d);
+  return d;
+};
+pick.addTo(map);
+let pickMarker=null;
+map.on('click', async e=>{
+  const t=`${e.latlng.lat.toFixed(6)}, ${e.latlng.lng.toFixed(6)}`;
+  document.getElementById('pick').innerHTML=`📍 <b>${t}</b><br><span style="color:#9fb0c3">copié dans le presse-papiers</span>`;
+  try{ await navigator.clipboard.writeText(t); }catch(_){}
+  if(pickMarker) map.removeLayer(pickMarker);
+  pickMarker=L.circleMarker(e.latlng,{radius:5,color:'#f59e0b',weight:2,fillColor:'#f59e0b',fillOpacity:.9})
+    .addTo(map).bindTooltip(t,{permanent:false}).openTooltip();
+});
+</script>
+</body>
+</html>
